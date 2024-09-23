@@ -71,6 +71,7 @@ pub async fn upload_by_command(
     line: Option<UploadLine>,
     limit: usize,
     submit: SubmitOption,
+    submit_proxy: String,
 ) -> Result<()> {
     let bili = login_by_cookies(user_cookie).await?;
     if studio.title.is_empty() {
@@ -92,7 +93,7 @@ pub async fn upload_by_command(
     // 说不定会适配 web 呢...?
     match submit {
         SubmitOption::App => bili.submit_by_app(&studio).await?,
-        _ => bili.submit(&studio).await?,
+        _ => bili.submit(&studio, Some(submit_proxy)).await?,
     };
 
     Ok(())
@@ -123,7 +124,7 @@ pub async fn upload_by_config(config: PathBuf, user_cookie: PathBuf) -> Result<(
             config.limit,
         )
         .await?;
-        bilibili.submit(&studio).await?;
+        bilibili.submit(&studio, None).await?;
     }
     Ok(())
 }

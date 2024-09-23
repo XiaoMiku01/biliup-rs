@@ -1,5 +1,6 @@
 use crate::error::{Kind, Result};
 use crate::uploader::credential::LoginInfo;
+use reqwest::Proxy;
 use serde::ser::Error;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -7,7 +8,7 @@ use std::fmt::{Display, Formatter};
 use std::num::ParseIntError;
 use std::str::FromStr;
 use std::time::Duration;
-use tracing::info;
+use tracing::{info, warn};
 use typed_builder::TypedBuilder;
 
 #[derive(clap::Args, Serialize, Deserialize, Debug, TypedBuilder)]
@@ -123,7 +124,6 @@ pub struct Studio {
     #[clap(long)]
     #[serde(default)]
     pub up_close_danmu: bool,
-
     // #[clap(long)]
     // #[serde(default)]
     // pub submit_by_app: bool,
@@ -201,8 +201,7 @@ impl FromStr for Vid {
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         let s = s.trim();
         if s.len() < 3 {
-            return s.parse::<u64>()
-                    .map(Vid::Aid);
+            return s.parse::<u64>().map(Vid::Aid);
         }
         match &s[..2] {
             "BV" => Ok(Vid::Bvid(s.to_string())),
@@ -225,30 +224,63 @@ pub struct BiliBili {
     pub client: reqwest::Client,
     pub login_info: LoginInfo,
 }
-
+async fn fetch_proxy(url: String) -> Result<String> {
+    let response = reqwest::get(url).await?;
+    let mut body = response.text().await?;
+    body = body.trim().to_string();
+    if body.contains("code") {
+        warn!("获取代理失败: {:?}", body);
+        Ok(String::new())
+    } else {
+        Ok(body)
+    }
+}
 impl BiliBili {
-    pub async fn submit(&self, studio: &Studio) -> Result<ResponseData> {
-            let ret: ResponseData = reqwest::Client::builder()
-                .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/63.0.3239.108")
-                .timeout(Duration::new(60, 0))
-                .build()?
-                .post(format!(
-                    "http://member.bilibili.com/x/vu/client/add?access_key={}",
-                    self.login_info.token_info.access_token
-                ))
-                .json(studio)
-                .send()
-                .await?
-                .json()
-                .await?;
-            info!("{:?}", ret);
-            if ret.code == 0 {
-                info!("投稿成功");
-                Ok(ret)
+    pub async fn submit(
+        &self,
+        studio: &Studio,
+        submit_proxy: Option<String>,
+    ) -> Result<ResponseData> {
+        let client_builder = reqwest::Client::builder()
+            .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/63.0.3239.108")
+            .timeout(Duration::new(60, 0));
+
+        let client = if let Some(proxy_url) = submit_proxy {
+            if !proxy_url.is_empty() {
+                let proxy_address = fetch_proxy(proxy_url).await?;
+                if !proxy_address.is_empty() {
+                    info!("提交使用代理：http://{}", proxy_address);
+                    client_builder
+                        .proxy(Proxy::http(&format!("http://{}", proxy_address))?)
+                        .build()?
+                } else {
+                    client_builder.build()?
+                }
             } else {
-                Err(Kind::Custom(format!("{:?}", ret)))
+                client_builder.build()?
             }
+        } else {
+            client_builder.build()?
+        };
+
+        let ret: ResponseData = client
+            .post(format!(
+                "http://member.bilibili.com/x/vu/client/add?access_key={}",
+                self.login_info.token_info.access_token
+            ))
+            .json(studio)
+            .send()
+            .await?
+            .json()
+            .await?;
+        info!("{:?}", ret);
+        if ret.code == 0 {
+            info!("投稿成功");
+            Ok(ret)
+        } else {
+            Err(Kind::Custom(format!("{:?}", ret)))
         }
+    }
 
     pub async fn submit_by_app(&self, studio: &Studio) -> Result<ResponseData> {
         let payload = {
@@ -267,7 +299,10 @@ impl BiliBili {
             });
 
             let urlencoded = serde_urlencoded::to_string(&payload)?;
-            let sign = crate::credential::Credential::sign(&urlencoded, crate::credential::AppKeyStore::BiliTV.appsec());
+            let sign = crate::credential::Credential::sign(
+                &urlencoded,
+                crate::credential::AppKeyStore::BiliTV.appsec(),
+            );
             payload["sign"] = Value::from(sign);
             payload
         };
