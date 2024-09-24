@@ -4,6 +4,8 @@ use reqwest::Proxy;
 use serde::ser::Error;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
+
 use std::fmt::{Display, Formatter};
 use std::num::ParseIntError;
 use std::str::FromStr;
@@ -127,6 +129,14 @@ pub struct Studio {
     // #[clap(long)]
     // #[serde(default)]
     // pub submit_by_app: bool,
+    /// 自定义提交参数
+    #[clap(long = "extra_fields", value_parser = parse_extra_fields)]
+    #[serde(flatten)]
+    pub extra_fields: Option<HashMap<String, Value>>,
+}
+
+fn parse_extra_fields(s: &str) -> std::result::Result<HashMap<String, Value>, String> {
+    serde_json::from_str(s).map_err(|e| e.to_string())
 }
 
 #[derive(Default, Debug, Serialize, Deserialize)]
